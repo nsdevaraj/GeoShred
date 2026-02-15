@@ -1,3 +1,4 @@
+
 import { Waveform, InstrumentPreset, ActiveNote } from '../types';
 
 class AudioEngine {
@@ -11,7 +12,7 @@ class AudioEngine {
   private activeNotes: Map<number, ActiveNote> = new Map();
   private preset: InstrumentPreset = {
     name: 'Pro Shredder',
-    waveform: Waveform.PHYSICAL_STRING,
+    waveform: Waveform.GUITAR,
     filterCutoff: 4000,
     resonance: 3,
     attack: 0.01,
@@ -40,14 +41,12 @@ class AudioEngine {
 
       this.updateDistortionCurve(this.preset.distortion);
 
-      // Routing: Source -> Distortion -> Filter -> Delay Loop -> Master
       this.distortion.connect(this.filter);
       this.filter.connect(this.masterGain);
       
-      // Delay Branch
       this.filter.connect(this.delay);
       this.delay.connect(this.delayGain);
-      this.delayGain.connect(this.delay); // feedback
+      this.delayGain.connect(this.delay);
       this.delayGain.connect(this.masterGain);
 
       this.masterGain.connect(this.ctx.destination);
@@ -90,7 +89,7 @@ class AudioEngine {
     }
   }
 
-  private createStringSource(freq: number): AudioNode {
+  private createStringSource(freq: number, feedback: number = 0.98, damping: number = 8000): AudioNode {
     if (!this.ctx) throw new Error("AudioContext not initialized");
     const period = 1 / freq;
     const burstLength = Math.max(2, Math.floor(this.ctx.sampleRate * period));
@@ -107,11 +106,11 @@ class AudioEngine {
     delay.delayTime.value = period;
 
     const feedbackGain = this.ctx.createGain();
-    feedbackGain.gain.value = 0.99 - (this.preset.stringDamping * 0.05);
+    feedbackGain.gain.value = feedback;
     
     const lp = this.ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = 8000;
+    lp.frequency.value = damping;
 
     burstSource.connect(delay);
     delay.connect(lp);
@@ -122,25 +121,108 @@ class AudioEngine {
     return delay;
   }
 
-  public noteOn(id: number, frequency: number) {
+  private createDrumSource(row: number, freq: number): AudioNode {
+    if (!this.ctx) throw new Error("AudioContext not initialized");
+    const now = this.ctx.currentTime;
+    
+    // Simple FM/Noise drum synthesis based on row
+    if (row === 0) { // Kick
+      const osc = this.ctx.createOscillator();
+      osc.frequency.setValueAtTime(150, now);
+      osc.frequency.exponentialRampToValueAtTime(0.01, now + 0.5);
+      osc.start();
+      osc.stop(now + 0.5);
+      return osc;
+    } else if (row === 1) { // Snare
+      const noise = this.ctx.createBufferSource();
+      const bufferSize = this.ctx.sampleRate * 0.2;
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+      noise.buffer = buffer;
+      
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 1000;
+      noise.connect(filter);
+      noise.start();
+      return filter;
+    } else { // Hi-hats and misc
+      const noise = this.ctx.createBufferSource();
+      const bufferSize = this.ctx.sampleRate * 0.05;
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+      noise.buffer = buffer;
+      
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 7000;
+      noise.connect(filter);
+      noise.start();
+      return filter;
+    }
+  }
+
+  public noteOn(id: number, frequency: number, row?: number) {
     this.init();
     if (!this.ctx || !this.distortion) return;
 
     let source: AudioNode;
     let gain = this.ctx.createGain();
+    const now = this.ctx.currentTime;
 
-    if (this.preset.waveform === Waveform.PHYSICAL_STRING) {
-      source = this.createStringSource(frequency);
-    } else {
-      const osc = this.ctx.createOscillator();
-      osc.type = this.preset.waveform as OscillatorType;
-      osc.frequency.setValueAtTime(frequency, this.ctx.currentTime);
-      osc.start();
-      source = osc;
+    switch (this.preset.waveform) {
+      case Waveform.PIANO:
+        // Additive piano-like sound
+        const osc1 = this.ctx.createOscillator();
+        const osc2 = this.ctx.createOscillator();
+        const osc3 = this.ctx.createOscillator();
+        osc1.frequency.value = frequency;
+        osc2.frequency.value = frequency * 2;
+        osc3.frequency.value = frequency * 3;
+        osc1.type = 'sine';
+        osc2.type = 'sine';
+        osc3.type = 'sine';
+        const mix = this.ctx.createGain();
+        osc1.connect(mix);
+        osc2.connect(mix);
+        osc3.connect(mix);
+        osc1.start(); osc2.start(); osc3.start();
+        source = mix;
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.6, now + 0.005);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 2.0);
+        break;
+
+      case Waveform.GUITAR:
+      case Waveform.PHYSICAL_STRING:
+        source = this.createStringSource(frequency, 0.985 - (this.preset.stringDamping * 0.05), 8000);
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.8, now + this.preset.attack);
+        break;
+
+      case Waveform.SLIDE:
+        source = this.createStringSource(frequency, 0.995, 12000);
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.9, now + 0.1);
+        break;
+
+      case Waveform.DRUMS:
+        source = this.createDrumSource(row || 0, frequency);
+        gain.gain.setValueAtTime(1, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        break;
+
+      default:
+        const osc = this.ctx.createOscillator();
+        osc.type = (this.preset.waveform as OscillatorType) || 'sawtooth';
+        osc.frequency.setValueAtTime(frequency, now);
+        osc.start();
+        source = osc;
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.8, now + this.preset.attack);
     }
-
-    gain.gain.setValueAtTime(0, this.ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.8, this.ctx.currentTime + this.preset.attack);
 
     source.connect(gain);
     gain.connect(this.distortion);
@@ -166,6 +248,12 @@ class AudioEngine {
   public noteOff(id: number) {
     const note = this.activeNotes.get(id);
     if (note && this.ctx) {
+      // Drum notes manage their own decay
+      if (this.preset.waveform === Waveform.DRUMS) {
+        this.activeNotes.delete(id);
+        return;
+      }
+
       const releaseTime = this.ctx.currentTime + this.preset.release;
       note.node.gain.cancelScheduledValues(this.ctx.currentTime);
       note.node.gain.setValueAtTime(note.node.gain.value, this.ctx.currentTime);

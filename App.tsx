@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { audioEngine } from './services/AudioEngine';
 import { generateAIPreset } from './services/GeminiService';
@@ -5,15 +6,17 @@ import { Waveform, InstrumentPreset, GridPos, ScaleType } from './types';
 import { 
   Settings, 
   Sparkles, 
-  Volume2, 
   Activity, 
   Music, 
   Zap,
   Layers,
   Waves,
   Repeat,
-  Tally4,
-  Cpu
+  Cpu,
+  Guitar,
+  Piano,
+  MousePointer2,
+  Drum
 } from 'lucide-react';
 
 const ROWS = 6;
@@ -35,7 +38,7 @@ const midiToFreq = (midi: number) => 440 * Math.pow(2, (midi - 69) / 12);
 const App: React.FC = () => {
   const [preset, setPreset] = useState<InstrumentPreset>({
     name: 'Pro Lead Shred',
-    waveform: Waveform.PHYSICAL_STRING,
+    waveform: Waveform.GUITAR,
     filterCutoff: 3000,
     resonance: 5,
     attack: 0.01,
@@ -68,12 +71,11 @@ const App: React.FC = () => {
   }, [preset]);
 
   const getSnappedMidi = (rawMidi: number) => {
-    if (!snapToScale) return rawMidi;
+    if (!snapToScale || preset.waveform === Waveform.DRUMS) return rawMidi;
     const octave = Math.floor(rawMidi / 12);
     const note = Math.round(rawMidi) % 12;
     const scaleNotes = SCALES[scale];
     
-    // Find closest note in scale
     let bestNote = scaleNotes[0];
     let minDiff = Infinity;
     for (const sNote of scaleNotes) {
@@ -102,13 +104,13 @@ const App: React.FC = () => {
     const snappedMidi = getSnappedMidi(rawMidi);
     
     const freq = midiToFreq(snappedMidi);
-    audioEngine.noteOn(e.pointerId, freq);
+    audioEngine.noteOn(e.pointerId, freq, row); // Pass row for drums
     setActiveTouches(prev => new Map(prev).set(e.pointerId, { row, col, midi: snappedMidi }));
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     const touch = activeTouches.get(e.pointerId);
-    if (!touch) return;
+    if (!touch || preset.waveform === Waveform.DRUMS) return;
     
     const rect = gridRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -144,6 +146,13 @@ const App: React.FC = () => {
       setIsAIGenerating(false);
     }
   };
+
+  const instruments = [
+    { type: Waveform.GUITAR, icon: Guitar, label: 'Guitar' },
+    { type: Waveform.PIANO, icon: Piano, label: 'Piano' },
+    { type: Waveform.SLIDE, icon: MousePointer2, label: 'Slide' },
+    { type: Waveform.DRUMS, icon: Drum, label: 'Drums' },
+  ];
 
   return (
     <div className="h-screen w-screen flex flex-col bg-black text-white select-none overflow-hidden font-sans">
@@ -187,7 +196,7 @@ const App: React.FC = () => {
       <main className="flex-1 relative flex">
         <div 
           ref={gridRef}
-          className="flex-1 grid gap-[1px] bg-[#1a1a1a] p-[1px] touch-none cursor-crosshair"
+          className={`flex-1 grid gap-[1px] bg-[#1a1a1a] p-[1px] touch-none cursor-crosshair ${preset.waveform === Waveform.DRUMS ? 'drum-mode' : ''}`}
           style={{ gridTemplateRows: `repeat(${ROWS}, 1fr)`, gridTemplateColumns: `repeat(${COLS}, 1fr)` }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -203,20 +212,29 @@ const App: React.FC = () => {
             const scaleActive = isInScale(midi);
             const isRoot = midi % 12 === 0;
 
+            let cellLabel = "";
+            if (preset.waveform === Waveform.DRUMS) {
+              const drumLabels = ['Kick', 'Snare', 'Tom', 'Hat', 'Rim', 'Clap'];
+              cellLabel = drumLabels[row] || "";
+            } else {
+              cellLabel = scaleActive ? `${['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12]}${Math.floor(midi/12)-1}` : "";
+            }
+
             return (
               <div
                 key={i}
                 className={`shred-grid-cell relative flex items-center justify-center pointer-events-none
-                  ${isActive ? 'active-cell' : scaleActive ? 'bg-[#111]' : 'bg-black/80 opacity-40'}
-                  ${isRoot && scaleActive ? 'border-l-2 border-l-cyan-500' : 'border border-white/5'}
+                  ${isActive ? 'active-cell' : (scaleActive || preset.waveform === Waveform.DRUMS) ? 'bg-[#111]' : 'bg-black/80 opacity-40'}
+                  ${isRoot && scaleActive && preset.waveform !== Waveform.DRUMS ? 'border-l-2 border-l-cyan-500' : 'border border-white/5'}
+                  ${preset.waveform === Waveform.DRUMS ? 'rounded-md m-1' : ''}
                 `}
               >
-                {scaleActive && (
+                {cellLabel && (
                   <div className="absolute top-1.5 left-1.5 text-[8px] font-bold text-white/20 uppercase">
-                    {['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12]}{Math.floor(midi/12)-1}
+                    {cellLabel}
                   </div>
                 )}
-                {isRoot && scaleActive && !isActive && <div className="w-1.5 h-1.5 rounded-full bg-cyan-500/20" />}
+                {isRoot && scaleActive && !isActive && preset.waveform !== Waveform.DRUMS && <div className="w-1.5 h-1.5 rounded-full bg-cyan-500/20" />}
               </div>
             );
           })}
@@ -238,17 +256,37 @@ const App: React.FC = () => {
           <div className="flex-1 overflow-y-auto px-6 space-y-6">
             {activeTab === 'synth' && (
               <>
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.values(Waveform).map(w => (
-                    <button 
-                      key={w}
-                      onClick={() => setPreset(prev => ({ ...prev, waveform: w }))}
-                      className={`py-3 text-[10px] font-bold rounded-lg border uppercase ${preset.waveform === w ? 'bg-white text-black' : 'bg-white/5 border-white/10'}`}
-                    >
-                      {w.replace('_', ' ')}
-                    </button>
-                  ))}
-                </div>
+                <section className="space-y-4">
+                   <h3 className="text-[10px] uppercase font-bold text-white/40">Instruments</h3>
+                   <div className="grid grid-cols-2 gap-2">
+                    {instruments.map(inst => (
+                      <button 
+                        key={inst.type}
+                        onClick={() => setPreset(prev => ({ ...prev, waveform: inst.type }))}
+                        className={`flex flex-col items-center gap-2 py-4 rounded-xl border transition-all ${preset.waveform === inst.type ? 'bg-cyan-500 text-black border-cyan-500 shadow-lg shadow-cyan-500/20' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      >
+                        <inst.icon size={20} />
+                        <span className="text-[10px] font-bold uppercase">{inst.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="space-y-4 pt-4 border-t border-white/5">
+                  <h3 className="text-[10px] uppercase font-bold text-white/40">Oscillators</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[Waveform.SAWTOOTH, Waveform.SQUARE, Waveform.SINE, Waveform.TRIANGLE].map(w => (
+                      <button 
+                        key={w}
+                        onClick={() => setPreset(prev => ({ ...prev, waveform: w }))}
+                        className={`py-2 text-[10px] font-bold rounded-lg border uppercase ${preset.waveform === w ? 'bg-white text-black' : 'bg-white/5 border-white/10'}`}
+                      >
+                        {w}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
                 <ControlSlider label="Filter" value={preset.filterCutoff} min={200} max={10000} onChange={v => setPreset(p => ({...p, filterCutoff: v}))} />
                 <ControlSlider label="Damping" value={preset.stringDamping} min={0} max={1} step={0.01} onChange={v => setPreset(p => ({...p, stringDamping: v}))} />
               </>
@@ -287,7 +325,7 @@ const App: React.FC = () => {
 
       <footer className="h-10 border-t border-white/5 bg-[#050505] flex items-center px-6 justify-between text-[10px] font-bold uppercase text-white/40">
         <div className="flex gap-6">
-          <span>{scale}</span>
+          <span>{preset.waveform === Waveform.DRUMS ? 'Percussion Mode' : scale}</span>
           <span>{activeTouches.size} Note(s)</span>
         </div>
         <div className="flex items-center gap-2">
@@ -305,7 +343,7 @@ const ControlSlider: React.FC<{label: string, value: number, min: number, max: n
       <span>{label}</span>
       <span>{value.toFixed(2)}</span>
     </div>
-    <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
+    <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full h-1.5 rounded-lg appearance-none bg-white/5 cursor-pointer accent-cyan-500" />
   </div>
 );
 

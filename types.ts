@@ -4,7 +4,11 @@ export enum Waveform {
   SQUARE = 'square',
   SAWTOOTH = 'sawtooth',
   TRIANGLE = 'triangle',
-  PHYSICAL_STRING = 'string'
+  PHYSICAL_STRING = 'string',
+  PIANO = 'piano',
+  GUITAR = 'guitar',
+  SLIDE = 'slide',
+  DRUMS = 'drums'
 }
 
 export enum ScaleType {
