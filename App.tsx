@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { audioEngine } from './services/AudioEngine';
 import { PRESETS } from './services/GeminiService';
@@ -147,12 +146,12 @@ const App: React.FC = () => {
       if (l.id === id) {
         if (l.isPlaying) {
           audioEngine.stopLoop(id);
-          return { ...l, isPlaying: false };
+          return { ...l, isPlaying: false, startTime: undefined };
         } else {
           audioEngine.playLoop(l, () => {
             // Callback when loop ends if not looping, but we loop them
           });
-          return { ...l, isPlaying: true };
+          return { ...l, isPlaying: true, startTime: audioEngine.currentTime };
         }
       }
       return l;
@@ -237,7 +236,7 @@ const App: React.FC = () => {
             const col = i % COLS;
             const invRow = ROWS - 1 - row;
             const midi = START_MIDI + (invRow * ROW_INTERVAL) + col;
-            const isActive = Array.from(activeTouches.values()).some((t) => t.row === row && t.col === col);
+            const isActive = Array.from(activeTouches.values()).some((t: GridPos) => t.row === row && t.col === col);
             const scaleActive = isInScale(midi);
             const isRoot = midi % 12 === 0;
 
@@ -351,28 +350,13 @@ const App: React.FC = () => {
                 ) : (
                   <div className="space-y-3">
                     {loops.map((loop, idx) => (
-                      <div key={loop.id} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center justify-between group hover:border-cyan-500/30 transition-all">
-                        <div className="flex items-center gap-3">
-                          <button 
-                            onClick={() => toggleLoop(loop.id)}
-                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${loop.isPlaying ? 'bg-cyan-500 text-black' : 'bg-white/10 text-white'}`}
-                          >
-                            {loop.isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-1" />}
-                          </button>
-                          <div>
-                            <p className="text-[10px] font-black uppercase tracking-tight">Loop {idx + 1}</p>
-                            <p className="text-[8px] font-bold text-white/40 uppercase tracking-widest">
-                              {loop.buffer.duration.toFixed(1)}s • {loop.isPlaying ? 'Playing' : 'Ready'}
-                            </p>
-                          </div>
-                        </div>
-                        <button 
-                          onClick={() => deleteLoop(loop.id)}
-                          className="opacity-0 group-hover:opacity-100 p-2 text-white/20 hover:text-red-500 transition-all"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
+                      <LoopItem 
+                        key={loop.id} 
+                        loop={loop} 
+                        index={idx} 
+                        onToggle={toggleLoop} 
+                        onDelete={deleteLoop} 
+                      />
                     ))}
                   </div>
                 )}
@@ -398,6 +382,94 @@ const App: React.FC = () => {
           <span className="opacity-60">Engine Active</span>
         </div>
       </footer>
+    </div>
+  );
+};
+
+const LoopItem: React.FC<{
+  loop: Loop;
+  index: number;
+  onToggle: (id: string) => void;
+  onDelete: (id: string) => void;
+}> = ({ loop, index, onToggle, onDelete }) => {
+  const [progress, setProgress] = useState(0);
+  const rafRef = useRef<number>();
+
+  useEffect(() => {
+    if (loop.isPlaying && loop.startTime !== undefined) {
+      const updateProgress = () => {
+        const now = audioEngine.currentTime;
+        const duration = loop.buffer.duration;
+        const elapsed = now - (loop.startTime || 0);
+        const p = (elapsed % duration) / duration;
+        setProgress(p);
+        rafRef.current = requestAnimationFrame(updateProgress);
+      };
+      rafRef.current = requestAnimationFrame(updateProgress);
+    } else {
+      setProgress(0);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    }
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [loop.isPlaying, loop.startTime, loop.buffer.duration]);
+
+  // SVG parameters
+  const size = 40;
+  const strokeWidth = 3;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const offset = circumference - progress * circumference;
+
+  return (
+     <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center justify-between group hover:border-cyan-500/30 transition-all">
+      <div className="flex items-center gap-3">
+        <div className="relative w-10 h-10 flex items-center justify-center">
+             <svg className="absolute top-0 left-0 w-full h-full transform -rotate-90 pointer-events-none">
+                <circle
+                  cx={size / 2}
+                  cy={size / 2}
+                  r={radius}
+                  fill="transparent"
+                  stroke={loop.isPlaying ? "rgba(255, 255, 255, 0.1)" : "transparent"}
+                  strokeWidth={strokeWidth}
+                />
+                <circle
+                  cx={size / 2}
+                  cy={size / 2}
+                  r={radius}
+                  fill="transparent"
+                  stroke={loop.isPlaying ? "#06b6d4" : "transparent"} 
+                  strokeWidth={strokeWidth}
+                  strokeDasharray={circumference}
+                  strokeDashoffset={offset}
+                  strokeLinecap="round"
+                />
+             </svg>
+
+            <button 
+              onClick={() => onToggle(loop.id)}
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all z-10 ${loop.isPlaying ? 'bg-cyan-500/20 text-cyan-500' : 'bg-white/10 text-white'}`}
+            >
+              {loop.isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
+            </button>
+        </div>
+        
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-tight">Loop {index + 1}</p>
+          <p className="text-[8px] font-bold text-white/40 uppercase tracking-widest">
+            {loop.buffer.duration.toFixed(1)}s • {loop.isPlaying ? 'Playing' : 'Ready'}
+          </p>
+        </div>
+      </div>
+      <button 
+        onClick={() => onDelete(loop.id)}
+        className="opacity-0 group-hover:opacity-100 p-2 text-white/20 hover:text-red-500 transition-all"
+      >
+        <Trash2 size={16} />
+      </button>
     </div>
   );
 };

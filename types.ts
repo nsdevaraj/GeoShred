@@ -62,4 +62,5 @@ export interface Loop {
   buffer: AudioBuffer;
   isPlaying: boolean;
   source?: AudioBufferSourceNode;
+  startTime?: number;
 }

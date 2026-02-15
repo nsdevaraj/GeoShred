@@ -1,3 +1,4 @@
+
 import { Waveform, InstrumentPreset, ActiveNote, Loop } from '../types';
 
 class AudioEngine {
@@ -65,6 +66,10 @@ class AudioEngine {
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
     }
+  }
+
+  public get currentTime(): number {
+    return this.ctx?.currentTime || 0;
   }
 
   public startRecording() {
