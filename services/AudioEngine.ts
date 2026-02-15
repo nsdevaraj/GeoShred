@@ -1,5 +1,4 @@
-
-import { Waveform, InstrumentPreset, ActiveNote } from '../types';
+import { Waveform, InstrumentPreset, ActiveNote, Loop } from '../types';
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -9,7 +8,13 @@ class AudioEngine {
   private delay: DelayNode | null = null;
   private delayGain: GainNode | null = null;
   
+  private recorder: MediaRecorder | null = null;
+  private recordChunks: Blob[] = [];
+  private dest: MediaStreamAudioDestinationNode | null = null;
+
   private activeNotes: Map<number, ActiveNote> = new Map();
+  private activeLoops: Map<string, AudioBufferSourceNode> = new Map();
+
   private preset: InstrumentPreset = {
     name: 'Pro Shredder',
     waveform: Waveform.GUITAR,
@@ -38,6 +43,9 @@ class AudioEngine {
       this.distortion = this.ctx.createWaveShaper();
       this.delay = this.ctx.createDelay(2.0);
       this.delayGain = this.ctx.createGain();
+      
+      // Setup recording destination
+      this.dest = this.ctx.createMediaStreamDestination();
 
       this.updateDistortionCurve(this.preset.distortion);
 
@@ -50,11 +58,65 @@ class AudioEngine {
       this.delayGain.connect(this.masterGain);
 
       this.masterGain.connect(this.ctx.destination);
+      this.masterGain.connect(this.dest); // Route to recorder
       this.masterGain.gain.value = 0.5;
     }
     
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
+    }
+  }
+
+  public startRecording() {
+    this.init();
+    if (!this.dest) return;
+    
+    this.recordChunks = [];
+    this.recorder = new MediaRecorder(this.dest.stream);
+    this.recorder.ondataavailable = (e) => this.recordChunks.push(e.data);
+    this.recorder.start();
+  }
+
+  public async stopRecording(): Promise<Loop | null> {
+    return new Promise((resolve) => {
+      if (!this.recorder || !this.ctx) return resolve(null);
+      
+      this.recorder.onstop = async () => {
+        const blob = new Blob(this.recordChunks, { type: 'audio/ogg; codecs=opus' });
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioBuffer = await this.ctx!.decodeAudioData(arrayBuffer);
+        const url = URL.createObjectURL(blob);
+        
+        resolve({
+          id: Math.random().toString(36).substr(2, 9),
+          url,
+          buffer: audioBuffer,
+          isPlaying: false
+        });
+      };
+      this.recorder.stop();
+    });
+  }
+
+  public playLoop(loop: Loop, onEnded: () => void) {
+    this.init();
+    if (!this.ctx || !this.masterGain) return;
+
+    const source = this.ctx.createBufferSource();
+    source.buffer = loop.buffer;
+    source.loop = true;
+    source.connect(this.masterGain);
+    source.start();
+    
+    this.activeLoops.set(loop.id, source);
+  }
+
+  public stopLoop(id: string) {
+    const source = this.activeLoops.get(id);
+    if (source) {
+      source.stop();
+      source.disconnect();
+      this.activeLoops.delete(id);
     }
   }
 
@@ -125,7 +187,6 @@ class AudioEngine {
     if (!this.ctx) throw new Error("AudioContext not initialized");
     const now = this.ctx.currentTime;
     
-    // Simple FM/Noise drum synthesis based on row
     if (row === 0) { // Kick
       const osc = this.ctx.createOscillator();
       osc.frequency.setValueAtTime(150, now);
@@ -174,7 +235,6 @@ class AudioEngine {
 
     switch (this.preset.waveform) {
       case Waveform.PIANO:
-        // Additive piano-like sound
         const osc1 = this.ctx.createOscillator();
         const osc2 = this.ctx.createOscillator();
         const osc3 = this.ctx.createOscillator();
@@ -248,7 +308,6 @@ class AudioEngine {
   public noteOff(id: number) {
     const note = this.activeNotes.get(id);
     if (note && this.ctx) {
-      // Drum notes manage their own decay
       if (this.preset.waveform === Waveform.DRUMS) {
         this.activeNotes.delete(id);
         return;

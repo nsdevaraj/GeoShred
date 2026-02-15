@@ -55,3 +55,11 @@ export interface GridPos {
   col: number;
   midi: number;
 }
+
+export interface Loop {
+  id: string;
+  url: string;
+  buffer: AudioBuffer;
+  isPlaying: boolean;
+  source?: AudioBufferSourceNode;
+}

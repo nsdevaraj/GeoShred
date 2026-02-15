@@ -1,22 +1,27 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { audioEngine } from './services/AudioEngine';
-import { generateAIPreset } from './services/GeminiService';
-import { Waveform, InstrumentPreset, GridPos, ScaleType } from './types';
+import { PRESETS } from './services/GeminiService';
+import { Waveform, InstrumentPreset, GridPos, ScaleType, Loop } from './types';
 import { 
   Settings, 
-  Sparkles, 
   Activity, 
   Music, 
   Zap,
   Layers,
-  Waves,
   Repeat,
   Cpu,
   Guitar,
   Piano,
   MousePointer2,
-  Drum
+  Drum,
+  ChevronDown,
+  Circle,
+  Square,
+  Play,
+  Pause,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 
 const ROWS = 6;
@@ -36,33 +41,16 @@ const SCALES: Record<ScaleType, number[]> = {
 const midiToFreq = (midi: number) => 440 * Math.pow(2, (midi - 69) / 12);
 
 const App: React.FC = () => {
-  const [preset, setPreset] = useState<InstrumentPreset>({
-    name: 'Pro Lead Shred',
-    waveform: Waveform.GUITAR,
-    filterCutoff: 3000,
-    resonance: 5,
-    attack: 0.01,
-    decay: 0.2,
-    sustain: 0.5,
-    release: 0.8,
-    detune: 0,
-    vibratoRate: 6,
-    vibratoDepth: 0.1,
-    distortion: 0.5,
-    delayFeedback: 0.3,
-    delayTime: 0.25,
-    reverbWet: 0.2,
-    feedbackAmount: 0.1,
-    stringDamping: 0.4
-  });
-  
+  const [preset, setPreset] = useState<InstrumentPreset>(PRESETS[0]);
   const [scale, setScale] = useState<ScaleType>(ScaleType.CHROMATIC);
   const [activeTouches, setActiveTouches] = useState<Map<number, GridPos>>(new Map());
-  const [isAIGenerating, setIsAIGenerating] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<'synth' | 'fx' | 'scale'>('synth');
+  const [activeTab, setActiveTab] = useState<'synth' | 'fx' | 'scale' | 'loops'>('synth');
   const [snapToScale, setSnapToScale] = useState(true);
+  
+  // Recording and Loops state
+  const [isRecording, setIsRecording] = useState(false);
+  const [loops, setLoops] = useState<Loop[]>([]);
 
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -104,7 +92,7 @@ const App: React.FC = () => {
     const snappedMidi = getSnappedMidi(rawMidi);
     
     const freq = midiToFreq(snappedMidi);
-    audioEngine.noteOn(e.pointerId, freq, row); // Pass row for drums
+    audioEngine.noteOn(e.pointerId, freq, row); 
     setActiveTouches(prev => new Map(prev).set(e.pointerId, { row, col, midi: snappedMidi }));
   };
 
@@ -134,17 +122,46 @@ const App: React.FC = () => {
     });
   };
 
-  const handleAIGenerate = async () => {
-    setIsAIGenerating(true);
-    try {
-      const newPreset = await generateAIPreset(aiPrompt || 'Shred');
-      setPreset(newPreset);
-      setShowSettings(true);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsAIGenerating(false);
+  const handlePresetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const selected = PRESETS.find(p => p.name === e.target.value);
+    if (selected) setPreset(selected);
+  };
+
+  const toggleRecording = async () => {
+    if (isRecording) {
+      const newLoop = await audioEngine.stopRecording();
+      if (newLoop) {
+        setLoops(prev => [...prev, newLoop]);
+        setShowSettings(true);
+        setActiveTab('loops');
+      }
+      setIsRecording(false);
+    } else {
+      audioEngine.startRecording();
+      setIsRecording(true);
     }
+  };
+
+  const toggleLoop = (id: string) => {
+    setLoops(prev => prev.map(l => {
+      if (l.id === id) {
+        if (l.isPlaying) {
+          audioEngine.stopLoop(id);
+          return { ...l, isPlaying: false };
+        } else {
+          audioEngine.playLoop(l, () => {
+            // Callback when loop ends if not looping, but we loop them
+          });
+          return { ...l, isPlaying: true };
+        }
+      }
+      return l;
+    }));
+  };
+
+  const deleteLoop = (id: string) => {
+    audioEngine.stopLoop(id);
+    setLoops(prev => prev.filter(l => l.id !== id));
   };
 
   const instruments = [
@@ -161,36 +178,48 @@ const App: React.FC = () => {
           <div className="bg-gradient-to-br from-cyan-400 to-blue-600 p-2 rounded-xl shadow-lg shadow-cyan-500/20">
             <Zap size={22} className="text-black fill-current" />
           </div>
-          <div>
+          <div className="hidden sm:block">
             <h1 className="font-black text-xl tracking-tighter italic uppercase text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-white">
               GeoShred <span className="text-white/20">Studio</span>
             </h1>
           </div>
         </div>
 
-        <div className="flex-1 max-w-xl mx-8 relative group">
-          <input 
-            type="text" 
-            placeholder="AI Tone Designer..."
-            className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 px-6 pr-14 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all text-sm placeholder:text-white/20"
-            value={aiPrompt}
-            onChange={(e) => setAiPrompt(e.target.value)}
-          />
-          <button 
-            onClick={handleAIGenerate}
-            disabled={isAIGenerating}
-            className={`absolute right-1.5 top-1.5 p-1.5 rounded-lg ${isAIGenerating ? 'bg-white/5' : 'bg-cyan-500 text-black'} transition-all`}
-          >
-            {isAIGenerating ? <Activity size={18} className="animate-spin" /> : <Sparkles size={18} />}
-          </button>
+        <div className="flex-1 max-w-md mx-4 sm:mx-8 relative">
+          <div className="relative group">
+            <select 
+              value={preset.name}
+              onChange={handlePresetChange}
+              className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 px-6 pr-10 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all text-sm appearance-none cursor-pointer font-bold tracking-tight text-cyan-400"
+            >
+              {PRESETS.map(p => (
+                <option key={p.name} value={p.name} className="bg-[#111] text-white">{p.name}</option>
+              ))}
+            </select>
+            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/40">
+              <ChevronDown size={16} />
+            </div>
+          </div>
         </div>
 
-        <button 
-          onClick={() => setShowSettings(!showSettings)}
-          className={`px-4 py-2 rounded-xl border transition-all ${showSettings ? 'bg-cyan-500 text-black' : 'bg-white/5 border-white/10'}`}
-        >
-          <Settings size={18} />
-        </button>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={toggleRecording}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl border transition-all ${isRecording ? 'bg-red-500 border-red-500 text-white animate-pulse' : 'bg-white/5 border-white/10 text-red-500 hover:bg-white/10'}`}
+          >
+            {isRecording ? <Square size={16} fill="currentColor" /> : <Circle size={16} fill="currentColor" />}
+            <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">
+              {isRecording ? 'Stop' : 'Rec'}
+            </span>
+          </button>
+          
+          <button 
+            onClick={() => setShowSettings(!showSettings)}
+            className={`px-4 py-2 rounded-xl border transition-all ${showSettings ? 'bg-cyan-500 text-black border-cyan-500' : 'bg-white/5 border-white/10'}`}
+          >
+            <Settings size={18} />
+          </button>
+        </div>
       </header>
 
       <main className="flex-1 relative flex">
@@ -241,12 +270,12 @@ const App: React.FC = () => {
         </div>
 
         <aside className={`absolute right-0 top-0 bottom-0 w-80 bg-[#0a0a0a]/95 backdrop-blur-xl border-l border-white/10 transition-transform duration-300 z-40 flex flex-col ${showSettings ? 'translate-x-0' : 'translate-x-full'}`}>
-          <div className="flex bg-[#111] p-1 gap-1 m-4 rounded-xl">
-            {['synth', 'fx', 'scale'].map(tab => (
+          <div className="flex bg-[#111] p-1 gap-1 m-4 rounded-xl border border-white/5">
+            {['synth', 'fx', 'scale', 'loops'].map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab as any)}
-                className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-all ${activeTab === tab ? 'bg-cyan-500 text-black' : 'text-white/40 hover:text-white'}`}
+                className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-all ${activeTab === tab ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20' : 'text-white/40 hover:text-white'}`}
               >
                 {tab}
               </button>
@@ -257,7 +286,7 @@ const App: React.FC = () => {
             {activeTab === 'synth' && (
               <>
                 <section className="space-y-4">
-                   <h3 className="text-[10px] uppercase font-bold text-white/40">Instruments</h3>
+                   <h3 className="text-[10px] uppercase font-bold text-white/40 tracking-widest">Base Category</h3>
                    <div className="grid grid-cols-2 gap-2">
                     {instruments.map(inst => (
                       <button 
@@ -272,65 +301,101 @@ const App: React.FC = () => {
                   </div>
                 </section>
 
-                <section className="space-y-4 pt-4 border-t border-white/5">
-                  <h3 className="text-[10px] uppercase font-bold text-white/40">Oscillators</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[Waveform.SAWTOOTH, Waveform.SQUARE, Waveform.SINE, Waveform.TRIANGLE].map(w => (
-                      <button 
-                        key={w}
-                        onClick={() => setPreset(prev => ({ ...prev, waveform: w }))}
-                        className={`py-2 text-[10px] font-bold rounded-lg border uppercase ${preset.waveform === w ? 'bg-white text-black' : 'bg-white/5 border-white/10'}`}
-                      >
-                        {w}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-
-                <ControlSlider label="Filter" value={preset.filterCutoff} min={200} max={10000} onChange={v => setPreset(p => ({...p, filterCutoff: v}))} />
-                <ControlSlider label="Damping" value={preset.stringDamping} min={0} max={1} step={0.01} onChange={v => setPreset(p => ({...p, stringDamping: v}))} />
+                <ControlSlider label="Filter Cutoff" value={preset.filterCutoff} min={200} max={10000} onChange={v => setPreset(p => ({...p, filterCutoff: v}))} />
+                <ControlSlider label="String Damping" value={preset.stringDamping} min={0} max={1} step={0.01} onChange={v => setPreset(p => ({...p, stringDamping: v}))} />
+                <ControlSlider label="Release" value={preset.release} min={0.1} max={3} step={0.1} onChange={v => setPreset(p => ({...p, release: v}))} />
               </>
             )}
 
             {activeTab === 'fx' && (
               <>
-                <ControlSlider label="Distortion" value={preset.distortion} min={0} max={1} step={0.01} onChange={v => setPreset(p => ({...p, distortion: v}))} />
-                <ControlSlider label="Feedback" value={preset.delayFeedback} min={0} max={0.9} step={0.01} onChange={v => setPreset(p => ({...p, delayFeedback: v}))} />
+                <ControlSlider label="Distortion Drive" value={preset.distortion} min={0} max={1} step={0.01} onChange={v => setPreset(p => ({...p, distortion: v}))} />
+                <ControlSlider label="Delay Feedback" value={preset.delayFeedback} min={0} max={0.9} step={0.01} onChange={v => setPreset(p => ({...p, delayFeedback: v}))} />
                 <ControlSlider label="Delay Time" value={preset.delayTime} min={0.05} max={1} step={0.01} onChange={v => setPreset(p => ({...p, delayTime: v}))} />
               </>
             )}
 
             {activeTab === 'scale' && (
               <div className="space-y-4">
+                <h3 className="text-[10px] uppercase font-bold text-white/40 tracking-widest">Master Tuning</h3>
                 {Object.keys(SCALES).map(s => (
                   <button 
                     key={s}
                     onClick={() => setScale(s as ScaleType)}
-                    className={`w-full py-3 px-4 text-left text-xs font-bold rounded-xl border uppercase ${scale === s ? 'bg-cyan-500 text-black' : 'bg-white/5 border-white/10'}`}
+                    className={`w-full py-3 px-4 text-left text-xs font-bold rounded-xl border uppercase transition-all ${scale === s ? 'bg-cyan-500 text-black border-cyan-500 shadow-lg shadow-cyan-500/20' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
                   >
                     {s}
                   </button>
                 ))}
-                <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl">
+                <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
                   <span className="text-xs font-bold uppercase">Snap to Scale</span>
-                  <button onClick={() => setSnapToScale(!snapToScale)} className={`w-12 h-6 rounded-full relative ${snapToScale ? 'bg-cyan-500' : 'bg-white/10'}`}>
+                  <button onClick={() => setSnapToScale(!snapToScale)} className={`w-12 h-6 rounded-full relative transition-all ${snapToScale ? 'bg-cyan-500' : 'bg-white/10'}`}>
                     <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${snapToScale ? 'left-7' : 'left-1'}`} />
                   </button>
                 </div>
+              </div>
+            )}
+
+            {activeTab === 'loops' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] uppercase font-bold text-white/40 tracking-widest">Loop Rack</h3>
+                  <span className="bg-cyan-500/20 text-cyan-500 px-2 py-0.5 rounded text-[8px] font-black">{loops.length} LOOPS</span>
+                </div>
+                
+                {loops.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-white/5 rounded-2xl text-white/20">
+                    <RefreshCw size={32} className="mb-4 opacity-20" />
+                    <p className="text-[10px] uppercase font-bold tracking-widest">No Loops Recorded</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {loops.map((loop, idx) => (
+                      <div key={loop.id} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center justify-between group hover:border-cyan-500/30 transition-all">
+                        <div className="flex items-center gap-3">
+                          <button 
+                            onClick={() => toggleLoop(loop.id)}
+                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${loop.isPlaying ? 'bg-cyan-500 text-black' : 'bg-white/10 text-white'}`}
+                          >
+                            {loop.isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-1" />}
+                          </button>
+                          <div>
+                            <p className="text-[10px] font-black uppercase tracking-tight">Loop {idx + 1}</p>
+                            <p className="text-[8px] font-bold text-white/40 uppercase tracking-widest">
+                              {loop.buffer.duration.toFixed(1)}s • {loop.isPlaying ? 'Playing' : 'Ready'}
+                            </p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => deleteLoop(loop.id)}
+                          className="opacity-0 group-hover:opacity-100 p-2 text-white/20 hover:text-red-500 transition-all"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
+                <p className="text-[8px] uppercase font-bold text-white/20 text-center mt-6 tracking-widest">
+                  Loops are saved for the current session only
+                </p>
               </div>
             )}
           </div>
         </aside>
       </main>
 
-      <footer className="h-10 border-t border-white/5 bg-[#050505] flex items-center px-6 justify-between text-[10px] font-bold uppercase text-white/40">
-        <div className="flex gap-6">
+      <footer className="h-10 border-t border-white/5 bg-[#050505] flex items-center px-6 justify-between text-[10px] font-bold uppercase tracking-widest text-white/40">
+        <div className="flex gap-6 items-center">
+          <span className="text-cyan-500/80 flex items-center gap-1"><Activity size={10} /> {preset.name}</span>
           <span>{preset.waveform === Waveform.DRUMS ? 'Percussion Mode' : scale}</span>
           <span>{activeTouches.size} Note(s)</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-          <span>Engine Active</span>
+          {loops.some(l => l.isPlaying) && <div className="flex items-center gap-1 mr-4"><RefreshCw size={10} className="animate-spin text-cyan-500" /> <span className="text-cyan-500">Loops Running</span></div>}
+          <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
+          <span className="opacity-60">Engine Active</span>
         </div>
       </footer>
     </div>
@@ -338,12 +403,20 @@ const App: React.FC = () => {
 };
 
 const ControlSlider: React.FC<{label: string, value: number, min: number, max: number, step?: number, onChange: (v: number) => void}> = ({label, value, min, max, step = 1, onChange}) => (
-  <div>
-    <div className="flex justify-between text-[10px] uppercase font-bold text-white/30 mb-2">
+  <div className="group">
+    <div className="flex justify-between text-[10px] uppercase font-bold text-white/30 mb-2 group-hover:text-white/60 transition-colors">
       <span>{label}</span>
-      <span>{value.toFixed(2)}</span>
+      <span className="font-mono text-cyan-400">{value.toFixed(2)}</span>
     </div>
-    <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full h-1.5 rounded-lg appearance-none bg-white/5 cursor-pointer accent-cyan-500" />
+    <input 
+      type="range" 
+      min={min} 
+      max={max} 
+      step={step} 
+      value={value} 
+      onChange={(e) => onChange(parseFloat(e.target.value))} 
+      className="w-full h-1.5 rounded-lg appearance-none bg-white/5 cursor-pointer accent-cyan-500" 
+    />
   </div>
 );
 
