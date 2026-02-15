@@ -3,7 +3,17 @@ export enum Waveform {
   SINE = 'sine',
   SQUARE = 'square',
   SAWTOOTH = 'sawtooth',
-  TRIANGLE = 'triangle'
+  TRIANGLE = 'triangle',
+  PHYSICAL_STRING = 'string'
+}
+
+export enum ScaleType {
+  CHROMATIC = 'chromatic',
+  MAJOR = 'major',
+  MINOR = 'minor',
+  BLUES = 'blues',
+  PENTATONIC = 'pentatonic',
+  RAGA_BHAIRAV = 'bhairav'
 }
 
 export interface InstrumentPreset {
@@ -18,18 +28,26 @@ export interface InstrumentPreset {
   detune: number;
   vibratoRate: number;
   vibratoDepth: number;
+  // New Pro Features
+  distortion: number;
+  delayFeedback: number;
+  delayTime: number;
+  reverbWet: number;
+  feedbackAmount: number;
+  stringDamping: number;
 }
 
 export interface ActiveNote {
   id: number;
   frequency: number;
   node: GainNode;
-  oscillator: OscillatorNode;
-  vibrato: OscillatorNode;
-  vibratoGain: GainNode;
+  oscillator: OscillatorNode | AudioNode; // AudioNode for string modeling
+  vibrato?: OscillatorNode;
+  vibratoGain?: GainNode;
 }
 
 export interface GridPos {
   row: number;
   col: number;
+  midi: number;
 }

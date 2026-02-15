@@ -1,96 +1,126 @@
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { audioEngine } from './services/AudioEngine';
 import { generateAIPreset } from './services/GeminiService';
-import { Waveform, InstrumentPreset, GridPos } from './types';
+import { Waveform, InstrumentPreset, GridPos, ScaleType } from './types';
 import { 
   Settings, 
   Sparkles, 
   Volume2, 
   Activity, 
   Music, 
-  ChevronRight,
-  Zap
+  Zap,
+  Layers,
+  Waves,
+  Repeat,
+  Tally4,
+  Cpu
 } from 'lucide-react';
 
 const ROWS = 6;
 const COLS = 12;
 const ROW_INTERVAL = 5; // Perfect 4th
-const START_MIDI = 48; // C3
+const START_MIDI = 36; // C2
+
+const SCALES: Record<ScaleType, number[]> = {
+  [ScaleType.CHROMATIC]: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  [ScaleType.MAJOR]: [0, 2, 4, 5, 7, 9, 11],
+  [ScaleType.MINOR]: [0, 2, 3, 5, 7, 8, 10],
+  [ScaleType.BLUES]: [0, 3, 5, 6, 7, 10],
+  [ScaleType.PENTATONIC]: [0, 2, 4, 7, 9],
+  [ScaleType.RAGA_BHAIRAV]: [0, 1, 4, 5, 7, 8, 11]
+};
 
 const midiToFreq = (midi: number) => 440 * Math.pow(2, (midi - 69) / 12);
 
 const App: React.FC = () => {
   const [preset, setPreset] = useState<InstrumentPreset>({
-    name: 'Lead Shredder',
-    waveform: Waveform.SAWTOOTH,
-    filterCutoff: 2500,
-    resonance: 8,
-    attack: 0.05,
+    name: 'Pro Lead Shred',
+    waveform: Waveform.PHYSICAL_STRING,
+    filterCutoff: 3000,
+    resonance: 5,
+    attack: 0.01,
     decay: 0.2,
-    sustain: 0.6,
-    release: 1.0,
+    sustain: 0.5,
+    release: 0.8,
     detune: 0,
     vibratoRate: 6,
-    vibratoDepth: 0.2
+    vibratoDepth: 0.1,
+    distortion: 0.5,
+    delayFeedback: 0.3,
+    delayTime: 0.25,
+    reverbWet: 0.2,
+    feedbackAmount: 0.1,
+    stringDamping: 0.4
   });
   
+  const [scale, setScale] = useState<ScaleType>(ScaleType.CHROMATIC);
   const [activeTouches, setActiveTouches] = useState<Map<number, GridPos>>(new Map());
   const [isAIGenerating, setIsAIGenerating] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  
+  const [activeTab, setActiveTab] = useState<'synth' | 'fx' | 'scale'>('synth');
+  const [snapToScale, setSnapToScale] = useState(true);
+
   const gridRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     audioEngine.updatePreset(preset);
   }, [preset]);
 
-  const handlePointerDown = (e: React.PointerEvent) => {
-    const target = e.target as HTMLElement;
-    const row = parseInt(target.dataset.row || '-1');
-    const col = parseInt(target.dataset.col || '-1');
+  const getSnappedMidi = (rawMidi: number) => {
+    if (!snapToScale) return rawMidi;
+    const octave = Math.floor(rawMidi / 12);
+    const note = Math.round(rawMidi) % 12;
+    const scaleNotes = SCALES[scale];
     
-    if (row !== -1 && col !== -1) {
-      const midi = START_MIDI + (row * ROW_INTERVAL) + col;
-      const freq = midiToFreq(midi);
-      audioEngine.noteOn(e.pointerId, freq);
-      setActiveTouches(prev => new Map(prev).set(e.pointerId, { row, col }));
-      (target as any).releasePointerCapture(e.pointerId);
+    // Find closest note in scale
+    let bestNote = scaleNotes[0];
+    let minDiff = Infinity;
+    for (const sNote of scaleNotes) {
+      const diff = Math.abs(note - sNote);
+      if (diff < minDiff) {
+        minDiff = diff;
+        bestNote = sNote;
+      }
     }
+    return (octave * 12) + bestNote;
+  };
+
+  const isInScale = (midi: number) => SCALES[scale].includes(midi % 12);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    const target = e.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const cellWidth = rect.width / COLS;
+    const cellHeight = rect.height / ROWS;
+    
+    const col = Math.floor((e.clientX - rect.left) / cellWidth);
+    const row = Math.floor((e.clientY - rect.top) / cellHeight);
+    const invertedRow = ROWS - 1 - row;
+    
+    const rawMidi = START_MIDI + (invertedRow * ROW_INTERVAL) + col;
+    const snappedMidi = getSnappedMidi(rawMidi);
+    
+    const freq = midiToFreq(snappedMidi);
+    audioEngine.noteOn(e.pointerId, freq);
+    setActiveTouches(prev => new Map(prev).set(e.pointerId, { row, col, midi: snappedMidi }));
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!activeTouches.has(e.pointerId)) return;
+    const touch = activeTouches.get(e.pointerId);
+    if (!touch) return;
     
     const rect = gridRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    // Calculate position within the grid for expression
-    const x = (e.clientX - rect.left) / rect.width;
     const y = 1 - (e.clientY - rect.top) / rect.height;
-
-    // Isomorphic expression logic: 
-    // Slide horizontally = micro-pitch bending
-    // Slide vertically = timbre modulation
     const cellWidth = rect.width / COLS;
-    const cellHeight = rect.height / ROWS;
-    
     const colFloat = (e.clientX - rect.left) / cellWidth;
-    const rowFloat = (e.clientY - rect.top) / cellHeight;
     
-    // Invert row because visual 0 is top
-    const actualRowFloat = ROWS - rowFloat;
-    
-    const midiFloat = START_MIDI + (Math.floor(rowFloat) * ROW_INTERVAL) + colFloat;
-    const freq = midiToFreq(midiFloat);
-    
-    // ModX is based on how far from cell center we are horizontally
-    const modX = (colFloat % 1) - 0.5;
-    // ModY is vertical position within the grid
-    const modY = y;
+    const currentMidi = touch.midi + (colFloat - (touch.col + 0.5));
+    const finalMidi = getSnappedMidi(currentMidi);
 
-    audioEngine.noteUpdate(e.pointerId, freq, modX, modY);
+    audioEngine.noteUpdate(e.pointerId, midiToFreq(finalMidi), 0, y);
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -103,10 +133,9 @@ const App: React.FC = () => {
   };
 
   const handleAIGenerate = async () => {
-    if (!aiPrompt) return;
     setIsAIGenerating(true);
     try {
-      const newPreset = await generateAIPreset(aiPrompt);
+      const newPreset = await generateAIPreset(aiPrompt || 'Shred');
       setPreset(newPreset);
       setShowSettings(true);
     } catch (error) {
@@ -117,211 +146,167 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-black text-white select-none overflow-hidden">
-      {/* Header / Toolbar */}
-      <header className="h-14 border-b border-white/10 flex items-center justify-between px-6 bg-[#111] z-20">
-        <div className="flex items-center gap-3">
-          <div className="bg-cyan-500 p-1.5 rounded-lg">
-            <Zap size={20} className="text-black fill-current" />
+    <div className="h-screen w-screen flex flex-col bg-black text-white select-none overflow-hidden font-sans">
+      <header className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-[#0a0a0a] z-30">
+        <div className="flex items-center gap-4">
+          <div className="bg-gradient-to-br from-cyan-400 to-blue-600 p-2 rounded-xl shadow-lg shadow-cyan-500/20">
+            <Zap size={22} className="text-black fill-current" />
           </div>
-          <h1 className="font-extrabold text-xl tracking-tighter italic uppercase text-cyan-400">
-            GeoShred <span className="text-white opacity-40">Pro</span>
-          </h1>
+          <div>
+            <h1 className="font-black text-xl tracking-tighter italic uppercase text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-white">
+              GeoShred <span className="text-white/20">Studio</span>
+            </h1>
+          </div>
         </div>
 
-        <div className="flex-1 max-w-xl mx-8 relative">
+        <div className="flex-1 max-w-xl mx-8 relative group">
           <input 
             type="text" 
-            placeholder="Describe a sound (e.g. 'Epic screaming lead guitar')..."
-            className="w-full bg-white/5 border border-white/10 rounded-full py-2 px-5 pr-12 focus:outline-none focus:border-cyan-500/50 transition-all text-sm"
+            placeholder="AI Tone Designer..."
+            className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 px-6 pr-14 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all text-sm placeholder:text-white/20"
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAIGenerate()}
           />
           <button 
             onClick={handleAIGenerate}
             disabled={isAIGenerating}
-            className={`absolute right-1 top-1 p-1.5 rounded-full ${isAIGenerating ? 'bg-white/10 text-white/20' : 'bg-cyan-500 text-black hover:bg-cyan-400'} transition-all`}
+            className={`absolute right-1.5 top-1.5 p-1.5 rounded-lg ${isAIGenerating ? 'bg-white/5' : 'bg-cyan-500 text-black'} transition-all`}
           >
-            {isAIGenerating ? <Activity size={18} className="animate-pulse" /> : <Sparkles size={18} />}
+            {isAIGenerating ? <Activity size={18} className="animate-spin" /> : <Sparkles size={18} />}
           </button>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex flex-col items-end mr-2">
-            <span className="text-[10px] uppercase font-bold tracking-widest text-white/30">Preset</span>
-            <span className="text-xs font-semibold text-cyan-400">{preset.name}</span>
-          </div>
-          <button 
-            onClick={() => setShowSettings(!showSettings)}
-            className={`p-2 rounded-lg transition-all ${showSettings ? 'bg-cyan-500 text-black' : 'bg-white/5 hover:bg-white/10'}`}
-          >
-            <Settings size={22} />
-          </button>
-        </div>
+        <button 
+          onClick={() => setShowSettings(!showSettings)}
+          className={`px-4 py-2 rounded-xl border transition-all ${showSettings ? 'bg-cyan-500 text-black' : 'bg-white/5 border-white/10'}`}
+        >
+          <Settings size={18} />
+        </button>
       </header>
 
-      {/* Main Grid Area */}
-      <main className="flex-1 relative flex overflow-hidden">
-        {/* The Instrument Grid */}
+      <main className="flex-1 relative flex">
         <div 
           ref={gridRef}
-          className="flex-1 grid gap-[1px] bg-white/5 p-[1px] touch-none"
+          className="flex-1 grid gap-[1px] bg-[#1a1a1a] p-[1px] touch-none cursor-crosshair"
           style={{ gridTemplateRows: `repeat(${ROWS}, 1fr)`, gridTemplateColumns: `repeat(${COLS}, 1fr)` }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
-          onPointerCancel={handlePointerUp}
         >
           {Array.from({ length: ROWS * COLS }).map((_, i) => {
             const row = Math.floor(i / COLS);
             const col = i % COLS;
-            const midi = START_MIDI + (row * ROW_INTERVAL) + col;
-            // Explicitly cast the value in the .some() callback to fix the unknown type error on properties row and col
-            const isActive = Array.from(activeTouches.values()).some((t: GridPos) => t.row === row && t.col === col);
+            const invRow = ROWS - 1 - row;
+            const midi = START_MIDI + (invRow * ROW_INTERVAL) + col;
+            const isActive = Array.from(activeTouches.values()).some((t) => t.row === row && t.col === col);
+            const scaleActive = isInScale(midi);
             const isRoot = midi % 12 === 0;
-            const isOctave = midi % 12 === 0 && midi !== 0;
 
             return (
               <div
                 key={i}
-                data-row={row}
-                data-col={col}
-                className={`shred-grid-cell relative flex items-center justify-center border border-white/5 cursor-crosshair
-                  ${isActive ? 'active-cell' : 'bg-[#151515]'}
-                  ${isRoot ? 'border-l-cyan-500/40 border-l-2' : ''}
-                  ${isOctave ? 'octave-cell bg-[#1a1a1a]' : ''}
+                className={`shred-grid-cell relative flex items-center justify-center pointer-events-none
+                  ${isActive ? 'active-cell' : scaleActive ? 'bg-[#111]' : 'bg-black/80 opacity-40'}
+                  ${isRoot && scaleActive ? 'border-l-2 border-l-cyan-500' : 'border border-white/5'}
                 `}
               >
-                <div className="absolute top-1 left-1.5 text-[8px] font-bold text-white/10 pointer-events-none uppercase">
-                  {['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12]}{Math.floor(midi/12)-1}
-                </div>
-                {isActive && (
-                  <div className="absolute inset-0 animate-pulse bg-cyan-400/5 pointer-events-none" />
+                {scaleActive && (
+                  <div className="absolute top-1.5 left-1.5 text-[8px] font-bold text-white/20 uppercase">
+                    {['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12]}{Math.floor(midi/12)-1}
+                  </div>
                 )}
+                {isRoot && scaleActive && !isActive && <div className="w-1.5 h-1.5 rounded-full bg-cyan-500/20" />}
               </div>
             );
           })}
         </div>
 
-        {/* Sidebar Settings */}
-        <aside className={`absolute right-0 top-0 bottom-0 w-80 bg-[#111] border-l border-white/10 transition-transform duration-300 z-10 shadow-2xl p-6 overflow-y-auto ${showSettings ? 'translate-x-0' : 'translate-x-full'}`}>
-          <div className="flex items-center gap-2 mb-8">
-            <Volume2 className="text-cyan-400" size={20} />
-            <h2 className="font-bold text-lg uppercase tracking-wider">Engine Settings</h2>
+        <aside className={`absolute right-0 top-0 bottom-0 w-80 bg-[#0a0a0a]/95 backdrop-blur-xl border-l border-white/10 transition-transform duration-300 z-40 flex flex-col ${showSettings ? 'translate-x-0' : 'translate-x-full'}`}>
+          <div className="flex bg-[#111] p-1 gap-1 m-4 rounded-xl">
+            {['synth', 'fx', 'scale'].map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab as any)}
+                className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-all ${activeTab === tab ? 'bg-cyan-500 text-black' : 'text-white/40 hover:text-white'}`}
+              >
+                {tab}
+              </button>
+            ))}
           </div>
 
-          <div className="space-y-6">
-            <section>
-              <label className="text-[10px] font-bold uppercase tracking-widest text-white/40 block mb-3">Oscillator</label>
-              <div className="grid grid-cols-2 gap-2">
-                {Object.values(Waveform).map(w => (
+          <div className="flex-1 overflow-y-auto px-6 space-y-6">
+            {activeTab === 'synth' && (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.values(Waveform).map(w => (
+                    <button 
+                      key={w}
+                      onClick={() => setPreset(prev => ({ ...prev, waveform: w }))}
+                      className={`py-3 text-[10px] font-bold rounded-lg border uppercase ${preset.waveform === w ? 'bg-white text-black' : 'bg-white/5 border-white/10'}`}
+                    >
+                      {w.replace('_', ' ')}
+                    </button>
+                  ))}
+                </div>
+                <ControlSlider label="Filter" value={preset.filterCutoff} min={200} max={10000} onChange={v => setPreset(p => ({...p, filterCutoff: v}))} />
+                <ControlSlider label="Damping" value={preset.stringDamping} min={0} max={1} step={0.01} onChange={v => setPreset(p => ({...p, stringDamping: v}))} />
+              </>
+            )}
+
+            {activeTab === 'fx' && (
+              <>
+                <ControlSlider label="Distortion" value={preset.distortion} min={0} max={1} step={0.01} onChange={v => setPreset(p => ({...p, distortion: v}))} />
+                <ControlSlider label="Feedback" value={preset.delayFeedback} min={0} max={0.9} step={0.01} onChange={v => setPreset(p => ({...p, delayFeedback: v}))} />
+                <ControlSlider label="Delay Time" value={preset.delayTime} min={0.05} max={1} step={0.01} onChange={v => setPreset(p => ({...p, delayTime: v}))} />
+              </>
+            )}
+
+            {activeTab === 'scale' && (
+              <div className="space-y-4">
+                {Object.keys(SCALES).map(s => (
                   <button 
-                    key={w}
-                    onClick={() => setPreset(prev => ({ ...prev, waveform: w }))}
-                    className={`py-2 px-3 text-xs rounded-md border capitalize transition-all ${preset.waveform === w ? 'bg-cyan-500 border-cyan-500 text-black' : 'bg-white/5 border-white/10 hover:border-white/30'}`}
+                    key={s}
+                    onClick={() => setScale(s as ScaleType)}
+                    className={`w-full py-3 px-4 text-left text-xs font-bold rounded-xl border uppercase ${scale === s ? 'bg-cyan-500 text-black' : 'bg-white/5 border-white/10'}`}
                   >
-                    {w}
+                    {s}
                   </button>
                 ))}
+                <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl">
+                  <span className="text-xs font-bold uppercase">Snap to Scale</span>
+                  <button onClick={() => setSnapToScale(!snapToScale)} className={`w-12 h-6 rounded-full relative ${snapToScale ? 'bg-cyan-500' : 'bg-white/10'}`}>
+                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${snapToScale ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
               </div>
-            </section>
-
-            <section>
-              <div className="flex justify-between items-center mb-3">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Filter Cutoff</label>
-                <span className="text-xs text-cyan-400 font-mono">{Math.round(preset.filterCutoff)}Hz</span>
-              </div>
-              <input 
-                type="range" min="100" max="10000" step="10"
-                value={preset.filterCutoff}
-                onChange={(e) => setPreset(prev => ({ ...prev, filterCutoff: parseFloat(e.target.value) }))}
-                className="w-full accent-cyan-500 bg-white/10 h-1.5 rounded-lg appearance-none"
-              />
-            </section>
-
-            <section>
-              <div className="flex justify-between items-center mb-3">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Resonance</label>
-                <span className="text-xs text-cyan-400 font-mono">{preset.resonance}</span>
-              </div>
-              <input 
-                type="range" min="0" max="25" step="0.5"
-                value={preset.resonance}
-                onChange={(e) => setPreset(prev => ({ ...prev, resonance: parseFloat(e.target.value) }))}
-                className="w-full accent-cyan-500 bg-white/10 h-1.5 rounded-lg appearance-none"
-              />
-            </section>
-
-            <section>
-              <label className="text-[10px] font-bold uppercase tracking-widest text-white/40 block mb-4">ADSR Envelope</label>
-              <div className="grid grid-cols-2 gap-4">
-                {['attack', 'decay', 'sustain', 'release'].map(attr => (
-                  <div key={attr}>
-                    <div className="flex justify-between text-[10px] mb-1 capitalize">
-                      <span>{attr}</span>
-                      <span className="text-cyan-400">{(preset as any)[attr]}</span>
-                    </div>
-                    <input 
-                      type="range" min="0.01" max="2" step="0.01"
-                      value={(preset as any)[attr]}
-                      onChange={(e) => setPreset(prev => ({ ...prev, [attr]: parseFloat(e.target.value) }))}
-                      className="w-full accent-cyan-500 bg-white/10 h-1 rounded-lg appearance-none"
-                    />
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section>
-               <div className="flex justify-between items-center mb-3">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-white/40">Vibrato Depth</label>
-                <span className="text-xs text-cyan-400 font-mono">{preset.vibratoDepth}</span>
-              </div>
-              <input 
-                type="range" min="0" max="1" step="0.01"
-                value={preset.vibratoDepth}
-                onChange={(e) => setPreset(prev => ({ ...prev, vibratoDepth: parseFloat(e.target.value) }))}
-                className="w-full accent-cyan-500 bg-white/10 h-1.5 rounded-lg appearance-none"
-              />
-            </section>
-          </div>
-
-          <div className="mt-12 pt-8 border-t border-white/5">
-            <button 
-              onClick={() => audioEngine.setMasterVolume(0)}
-              className="w-full bg-red-500/10 hover:bg-red-500/20 text-red-500 py-3 rounded-lg font-bold text-xs uppercase tracking-widest transition-all"
-            >
-              Emergency Kill
-            </button>
+            )}
           </div>
         </aside>
       </main>
 
-      {/* Expression Visualizer Footer */}
-      <footer className="h-10 border-t border-white/10 bg-[#0a0a0a] flex items-center px-4 justify-between">
-        <div className="flex items-center gap-6 overflow-hidden">
-          <div className="flex items-center gap-2">
-            <Music size={14} className="text-white/40" />
-            <span className="text-[10px] text-white/40 uppercase font-bold tracking-widest">Active Notes</span>
-            <div className="flex gap-1">
-              {Array.from(activeTouches.keys()).map(id => (
-                <div key={id} className="w-2 h-2 rounded-full bg-cyan-500 shadow-[0_0_5px_cyan]" />
-              ))}
-              {activeTouches.size === 0 && <span className="text-[10px] text-white/10">Idle</span>}
-            </div>
-          </div>
+      <footer className="h-10 border-t border-white/5 bg-[#050505] flex items-center px-6 justify-between text-[10px] font-bold uppercase text-white/40">
+        <div className="flex gap-6">
+          <span>{scale}</span>
+          <span>{activeTouches.size} Note(s)</span>
         </div>
-        
-        <div className="text-[9px] text-white/20 font-medium uppercase flex items-center gap-2">
-          <span>Buffer: Low Latency</span>
-          <div className="w-1 h-1 rounded-full bg-green-500" />
-          <span className="ml-2">Mode: Isomorphic Fourth</span>
+        <div className="flex items-center gap-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          <span>Engine Active</span>
         </div>
       </footer>
     </div>
   );
 };
+
+const ControlSlider: React.FC<{label: string, value: number, min: number, max: number, step?: number, onChange: (v: number) => void}> = ({label, value, min, max, step = 1, onChange}) => (
+  <div>
+    <div className="flex justify-between text-[10px] uppercase font-bold text-white/30 mb-2">
+      <span>{label}</span>
+      <span>{value.toFixed(2)}</span>
+    </div>
+    <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
+  </div>
+);
 
 export default App;
