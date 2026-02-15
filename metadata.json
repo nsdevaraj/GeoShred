@@ -1,0 +1,7 @@
+{
+  "name": "GeoShred Web Pro",
+  "description": "A professional-grade isomorphic musical instrument with advanced expression controls and smart preset generation.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
